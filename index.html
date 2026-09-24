@@ -189,6 +189,59 @@
     padding: 1px 7px;
     border-radius: 6px;
   }
+  .history {
+    background: var(--board);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+  }
+  .history-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 8px; }
+  .history h2 {
+    margin: 0;
+    font-family: "Unbounded", system-ui, sans-serif;
+    font-weight: 500;
+    font-size: 15px;
+  }
+  .history-head small { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
+  .clear {
+    background: none;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 9px;
+    border-radius: 8px;
+  }
+  .clear:hover { color: var(--ink); background: var(--ground); }
+  .clear.confirm { color: var(--food); }
+  .games { list-style: none; margin: 0; padding: 0; }
+  .games li {
+    display: grid;
+    grid-template-columns: 28px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 10px;
+    border-radius: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .games li.latest { background: color-mix(in srgb, var(--head) 10%, transparent); }
+  .rank { font-family: "Unbounded", system-ui, sans-serif; font-size: 13px; color: var(--muted); }
+  .games li:first-child .rank { color: var(--head); }
+  .pts { font-family: "Unbounded", system-ui, sans-serif; font-size: 18px; font-weight: 500; }
+  .pts small { font-family: "Figtree", system-ui, sans-serif; font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 4px; }
+  .meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); text-align: right; }
+  .pill {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: #fff;
+    background: var(--head);
+    padding: 2px 7px;
+    border-radius: 999px;
+  }
+  .empty { margin: 0; padding-block: 6px; font-size: 14px; color: var(--muted); }
+
   /* Mouse + keyboard users get key hints; touch users get the d-pad. */
   @media (hover: hover) and (pointer: fine) { .pad { display: none; } }
   @media not ((hover: hover) and (pointer: fine)) { .help { display: none; } }
@@ -227,6 +280,18 @@
     <kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd> or <kbd>WASD</kbd> to steer ·
     <kbd>Space</kbd> to start and pause
   </p>
+
+  <section class="history" aria-labelledby="historyTitle">
+    <div class="history-head">
+      <div>
+        <h2 id="historyTitle">Your last 10 games</h2>
+        <small>Ranked by score</small>
+      </div>
+      <button class="clear" id="clearHistory" type="button">Clear</button>
+    </div>
+    <ol class="games" id="games"></ol>
+    <p class="empty" id="emptyHistory">No games yet. Finish a game and it shows up here.</p>
+  </section>
 </main>
 
 <script>
@@ -263,12 +328,19 @@
 
   try { best = Number(localStorage.getItem("pocket-snake-best")) || 0; } catch (e) {}
 
+  // Last 10 finished games, oldest first, saved in this browser only.
+  const HISTORY_KEY = "pocket-snake-history", HISTORY_MAX = 10;
+  let pastGames = [], playMs = 0, lastRank = 0;
+  try { pastGames = JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; } catch (e) {}
+  if (!Array.isArray(pastGames)) pastGames = [];
+
   function reset() {
     snake = [{ x: 9, y: 10 }, { x: 8, y: 10 }, { x: 7, y: 10 }, { x: 6, y: 10 }];
     prev = snake.map((s) => ({ ...s }));
     dir = "right";
     queue = [];
     score = 0;
+    playMs = 0;
     stepMs = START_MS;
     placeFood();
     updateHud();
@@ -331,10 +403,71 @@
       best = score;
       try { localStorage.setItem("pocket-snake-best", String(best)); } catch (e) {}
     }
+    recordGame();
     updateHud();
     showOverlay();
     draw();
   }
+
+  // ---------- game history ----------
+  function recordGame() {
+    const game = { score, ms: Math.round(playMs), at: Date.now() };
+    pastGames = [...pastGames, game].slice(-HISTORY_MAX);
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(pastGames)); } catch (e) {}
+    lastRank = ranked().indexOf(game) + 1;
+    renderHistory();
+  }
+
+  // Highest score first; on a tie, the more recent game ranks higher.
+  const ranked = () => [...pastGames].sort((a, b) => b.score - a.score || b.at - a.at);
+
+  function fmtDuration(ms) {
+    const s = Math.round(ms / 1000), m = Math.floor(s / 60);
+    return m ? `${m}m ${s % 60}s` : `${s}s`;
+  }
+  function timeAgo(at) {
+    const s = (Date.now() - at) / 1000;
+    if (s < 60) return "just now";
+    if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+    return new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+
+  function renderHistory() {
+    const latest = pastGames[pastGames.length - 1];
+    $("games").replaceChildren(...ranked().map((g, i) => {
+      const li = document.createElement("li");
+      if (g === latest) li.className = "latest";
+      li.innerHTML = `
+        <span class="rank">${i + 1}</span>
+        <span class="pts">${Number(g.score)}<small>pts</small></span>
+        <span class="meta">
+          ${g === latest ? '<span class="pill">Latest</span>' : ""}
+          ${fmtDuration(Number(g.ms) || 0)} · ${timeAgo(Number(g.at))}
+        </span>`;
+      return li;
+    }));
+    $("emptyHistory").hidden = pastGames.length > 0;
+    $("clearHistory").hidden = pastGames.length === 0;
+  }
+
+  // Clearing takes two clicks so it can't happen by accident.
+  let clearTimer;
+  $("clearHistory").addEventListener("click", (e) => {
+    const btn = e.currentTarget;
+    if (!btn.classList.contains("confirm")) {
+      btn.classList.add("confirm");
+      btn.textContent = "Click again to clear";
+      clearTimer = setTimeout(() => { btn.classList.remove("confirm"); btn.textContent = "Clear"; }, 3000);
+      return;
+    }
+    clearTimeout(clearTimer);
+    btn.classList.remove("confirm");
+    btn.textContent = "Clear";
+    pastGames = [];
+    try { localStorage.removeItem(HISTORY_KEY); } catch (e) {}
+    renderHistory();
+  });
 
   function updateHud() {
     $("score").textContent = score;
@@ -357,7 +490,7 @@
       $("ovTitle").textContent = record ? "New best!" : "Game over";
       $("ovText").textContent = record
         ? `You set a new high score of ${score}.`
-        : `You scored ${score}. Your best is ${best}.`;
+        : `You scored ${score}, #${lastRank} of your last ${pastGames.length} ${pastGames.length === 1 ? "game" : "games"}.`;
       $("ovBtn").textContent = "Play again";
     }
   }
@@ -443,7 +576,10 @@
   function loop(time) {
     requestAnimationFrame(loop);
     if (state === "running") {
-      acc += time - last;
+      // Cap the gap so a stalled tab doesn't count as play time or jump the snake ahead.
+      const dt = Math.min(time - last, 250);
+      acc += dt;
+      playMs += dt;
       while (acc >= stepMs && state === "running") {
         acc -= stepMs;
         step();
@@ -492,6 +628,8 @@
   new MutationObserver(readColors).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
   reset();
+  renderHistory();
+  setInterval(renderHistory, 30000);   // keep "5 min ago" labels fresh
   readColors();
   resize();
   showOverlay();
